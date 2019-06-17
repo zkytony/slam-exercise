@@ -19,12 +19,12 @@ class Space(ABC):
     @abstractmethod
     def dimensionality(self):
         """
-        Returns if e is an entity in this space
+        Returns an integer dimensionality of this space
         """
         pass
 
     @abstractmethod
-    def enumerate(self, func, args, d=None, rnge=None):
+    def enumerate(self, rnge=None):
         """
         Enumerate all elements in this space, or enumerate all values along
         dimension `d`. Execute function `func` with `args` at every step.
