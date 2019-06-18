@@ -9,6 +9,9 @@ class Space(ABC):
     def __init__(self):
         pass
 
+    def is_continuous(self):
+        return False    
+
     @abstractmethod
     def contains(self, e):
         """
