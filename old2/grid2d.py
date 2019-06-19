@@ -177,7 +177,6 @@ class GridAgent(Agent):
         pass
 
 
-
 class GridWorld(Environment):
 
     """

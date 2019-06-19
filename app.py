@@ -2,6 +2,7 @@ import numpy as np
 import pygame
 import cv2
 import math
+from gridslam import MotionModel, SensorModel, EKFSlamRobot
 
 # Coordinates
 # ---> X
@@ -21,9 +22,14 @@ world1 = \
 ......xxxxx..
 """
 
+def dist(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    return math.sqrt((x1-x2)**2 + (y1-y2)**2)
+
 class GridWorld:
     
-    def __init__(self, worldstr,):
+    def __init__(self, worldstr):
         """
         r: resolution, number of pixels per cell width.
         """
@@ -32,6 +38,7 @@ class GridWorld:
         w, h = len(lines[0]), len(lines)
         arr2d = np.zeros((w,h), dtype=np.int32)
         robotpose = None
+        landmarks = set({})
         for y, l in enumerate(lines):
             if len(l) != w:
                 raise ValueError("World size inconsistent."\
@@ -42,6 +49,7 @@ class GridWorld:
                     arr2d[x,y] = 0
                 elif c == "x":
                     arr2d[x,y] = 1
+                    landmarks.add((x,y))
                 elif c == "R":
                     arr2d[x,y] = 0
                     robotpose = (x,y,math.pi/4)
@@ -49,6 +57,7 @@ class GridWorld:
             raise ValueError("No initial robot pose!")
         self._d = arr2d
         self._robotpose = robotpose
+        self._landmarks = landmarks
         
     @property
     def width(self):
@@ -72,24 +81,53 @@ class GridWorld:
            and y >= 0 and y < self.height:
             return self._d[x,y] == 0
         return True
-            
 
-    def move_robot(self, forward, angle):
+    def move_robot(self, forward, angle, motion_model):
+        """
+        forward: translational displacement (vt)
+        angle: angular displacement (vw)
+        """
         # First turn, then move forward.
-        rx, ry, rth = self._robotpose
+        begin_pose = self._robotpose
+        rx, ry, rth = begin_pose
         rth += angle
         rx = int(round(rx + forward*math.cos(rth)))
         ry = int(round(ry + forward*math.sin(rth)))
-        if self.valid_pose(rx, ry):
-            self._robotpose = (rx, ry, rth)
+        rth = rth % (2*math.pi)
 
+        if motion_model == MotionModel.ODOMETRY:
+            if self.valid_pose(rx, ry):
+                self._robotpose = (rx, ry, rth)
+                rx0, ry0, rth0 = begin_pose
+                dtrans = dist((rx, ry), (rx0, ry0))
+                drot1 = (math.atan2(ry - ry0, rx - rx0) - rth0) % (2*math.pi)
+                drot2 = (rth - rth0 - drot1) % (2*math.pi)
+                return (drot1, dtrans, drot2)
+            else:
+                return (0, 0, 0)                    
+
+
+    def provide_observation(self, sensor_model, sensor_params):
+        """Given the current robot pose, provide the observation z."""
+        params = SensorModel.interpret_params(sensor_model, sensor_params)
+        if sensor_model == SensorModel.RANGE_BEARING:
+            landmarks_in_range = set(l for l in self._landmarks
+                                     if dist(l, self._robotpose[:2]) <= params['max_range']\
+                                     and dist(l, self._robotpose[:2]) >= params['min_range'])
+            rx, ry, rth = self._robotpose
+            z = [(dist(l, (rx, ry)),  # distance
+                  math.atan2(l[1] - ry, l[0] - rx) - rth)  # bearing (i.e. orientation)
+                 for l in landmarks_in_range]
+            return z
+            
 class App:
 
-    def __init__(self, gridworld, res=30, fps=30):
+    def __init__(self, gridworld, robot, res=30, fps=30):
         """
         r: resolution, number of pixels per cell width.
         """
         self._gridworld = gridworld
+        self._robot = robot
         self._resolution = res
         self._img = self._make_gridworld_image(res)
         
@@ -156,12 +194,20 @@ class App:
         if event.type == pygame.QUIT:
             self._running = False
         elif event.type == pygame.KEYDOWN:
+            
             if event.key == pygame.K_LEFT:
-                self._gridworld.move_robot(0, -math.pi/4)  # rotate left 45 degree
+                u = self._gridworld.move_robot(0, -math.pi/4, robot.motion_model)  # rotate left 45 degree
+                robot.move(u)
             elif event.key == pygame.K_RIGHT:
-                self._gridworld.move_robot(0, math.pi/4)  # rotate left 45 degree
+                u = self._gridworld.move_robot(0, math.pi/4, robot.motion_model)  # rotate left 45 degree
+                robot.move(u)
             elif event.key == pygame.K_UP:
-                self._gridworld.move_robot(1, 0)
+                u = self._gridworld.move_robot(1, 0, robot.motion_model)
+                robot.move(u)
+                
+            z = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, robot.sensor_params)
+            robot.observe(z)
+                
             
     def on_loop(self):
         self._playtime += self._clock.tick(self._fps) / 1000.0
@@ -193,5 +239,6 @@ class App:
 
 if __name__ == "__main__" :
     gridworld = GridWorld(world1)
-    theApp = App(gridworld, res=30, fps=60)
+    robot = EKFSlamRobot(sensor_params={'max_range':5, 'min_range':1})
+    theApp = App(gridworld, robot, res=30, fps=60)
     theApp.on_execute()
