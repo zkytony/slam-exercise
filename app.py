@@ -2,7 +2,6 @@ import numpy as np
 import pygame
 import cv2
 import math
-from pygame.locals import *
 
 # Coordinates
 # ---> X
@@ -17,20 +16,21 @@ world1 = \
 ...xx.....x..
 ......xx.....
 ..x........x.
-..x........x.
-..x..xx..R...
+..x....R...x.
+..x..xx......
 ......xxxxx..
 """
 
 class GridWorld:
     
-    def __init__(self, worldstr, r=30):
-        """r: resolutoin, number of pixels per cell width"""
+    def __init__(self, worldstr,):
+        """
+        r: resolution, number of pixels per cell width.
+        """
         lines = [l for l in worldstr.splitlines()
              if len(l) > 0]
         w, h = len(lines[0]), len(lines)
         arr2d = np.zeros((w,h), dtype=np.int32)
-        img = np.full((w*r,h*r,3), 255, dtype=np.int32)
         robotpose = None
         for y, l in enumerate(lines):
             if len(l) != w:
@@ -40,19 +40,14 @@ class GridWorld:
             for x, c in enumerate(l):
                 if c == ".":
                     arr2d[x,y] = 0
-                    img[x*r:x*r+r,y*r:y*r+r] = np.array([255, 255, 255])
                 elif c == "x":
                     arr2d[x,y] = 1
-                    img[x*r:x*r+r,y*r:y*r+r] = np.array([40, 31, 3])
                 elif c == "R":
                     arr2d[x,y] = 0
-                    img[x*r:x*r+r,y*r:y*r+r] = np.array([255, 255, 255])
-                    robotpose = (x,y,0)
+                    robotpose = (x,y,math.pi/4)
         if robotpose is None:
             raise ValueError("No initial robot pose!")
         self._d = arr2d
-        self._img = img
-        self._resolution = r
         self._robotpose = robotpose
         
     @property
@@ -64,44 +59,91 @@ class GridWorld:
         return self._d.shape[1]
 
     @property
-    def img_width(self):
-        return self._img.shape[0]
-    
+    def arr(self):
+        return self._d
+
     @property
-    def img_height(self):
-        return self._img.shape[1]
+    def robotpose(self):
+        # The pose is (x,y,th)
+        return self._robotpose
 
-    def render(self, display_surf):
-        # draw robot, a circle and a vector
+    def valid_pose(self, x, y):
+        if x >= 0 and x < self.width \
+           and y >= 0 and y < self.height:
+            return self._d[x,y] == 0
+        return True
+            
+
+    def move_robot(self, forward, angle):
+        # First turn, then move forward.
         rx, ry, rth = self._robotpose
-        r = self._resolution  # Not radius!
-        cv2.circle(self._img, (ry*r,rx*r), r//2, (255, 12, 12), thickness=1)
-
-        endpoint = (ry*r + int(round(r/2*math.sin(rth))),
-                    rx*r + int(round(r/2*math.cos(rth))))
-        cv2.line(self._img, (ry*r,rx*r), endpoint, (255, 12, 12))
-                 
-        pygame.surfarray.blit_array(display_surf, self._img)
-        
+        rth += angle
+        rx = int(round(rx + forward*math.cos(rth)))
+        ry = int(round(ry + forward*math.sin(rth)))
+        if self.valid_pose(rx, ry):
+            self._robotpose = (rx, ry, rth)
 
 class App:
 
-    def __init__(self, gridworld, fps=30):
-        """resolution: number of pixels in the display per cell"""
+    def __init__(self, gridworld, res=30, fps=30):
+        """
+        r: resolution, number of pixels per cell width.
+        """
         self._gridworld = gridworld
+        self._resolution = res
+        self._img = self._make_gridworld_image(res)
+        
         
         self._running = True
         self._display_surf = None
         self._image_surf = None
         self._fps = fps
         self._playtime = 0
+
+    def _make_gridworld_image(self, r):
+        arr2d = self._gridworld.arr
+        w, h = arr2d.shape
+        img = np.full((w*r,h*r,3), 255, dtype=np.int32)
+        for x in range(w):
+            for y in range(h):
+                if arr2d[x,y] == 0:
+                    cv2.rectangle(img, (y*r, x*r), (y*r+r, x*r+r),
+                                  (255, 255, 255), -1)
+                elif arr2d[x,y] == 1:
+                    cv2.rectangle(img, (y*r, x*r), (y*r+r, x*r+r),
+                                  (40, 31, 3), -1)
+                cv2.rectangle(img, (y*r, x*r), (y*r+r, x*r+r),
+                              (0, 0, 0), 1, 8)                    
+        return img
+        
+    def render_env(self, display_surf):
+        # draw robot, a circle and a vector
+        rx, ry, rth = self._gridworld.robotpose
+        r = self._resolution  # Not radius!
+        radius = int(round(r / 2))
+        img = np.copy(self._img)
+        cv2.circle(img, (ry*r+radius, rx*r+radius), radius, (255, 12, 12), thickness=2)
+
+        endpoint = (ry*r+radius + int(round(r/2*math.sin(rth))),
+                    rx*r+radius + int(round(r/2*math.cos(rth))))
+        cv2.line(img, (ry*r+radius,rx*r+radius), endpoint, (255, 12, 12), 2)
+                 
+        pygame.surfarray.blit_array(display_surf, img)
+        
+    @property
+    def img_width(self):
+        return self._img.shape[0]
+    
+    @property
+    def img_height(self):
+        return self._img.shape[1]
  
     def on_init(self):
         # pygame init
         pygame.init()  # calls pygame.font.init()
         # init main screen and background
-        self._display_surf = pygame.display.set_mode((self._gridworld.img_width,
-                                                      self._gridworld.img_height),
+        self._display_surf = pygame.display.set_mode((self.img_width,
+                                                      self.img_height),
                                                      pygame.HWSURFACE)
         self._background = pygame.Surface(self._display_surf.get_size()).convert()
         self._clock = pygame.time.Clock()
@@ -111,21 +153,27 @@ class App:
         self._running = True
  
     def on_event(self, event):
-        if event.type == QUIT:
+        if event.type == pygame.QUIT:
             self._running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_LEFT:
+                self._gridworld.move_robot(0, -math.pi/4)  # rotate left 45 degree
+            elif event.key == pygame.K_RIGHT:
+                self._gridworld.move_robot(0, math.pi/4)  # rotate left 45 degree
+            elif event.key == pygame.K_UP:
+                self._gridworld.move_robot(1, 0)
             
     def on_loop(self):
         self._playtime += self._clock.tick(self._fps) / 1000.0
     
     def on_render(self):
         # self._display_surf.blit(self._background, (0, 0))
-        self._gridworld.render(self._display_surf)
+        self.render_env(self._display_surf)
         
-        text = "FPS: {0:.2f}   Playtime: {1:.2f}".format(self._clock.get_fps(),
-                                                         self._playtime)
-        # text_surf = self._myfont.render(text, False, (255, 200, 255))
-        # self._display_surf.blit(text_surf, (0, 0))
-        pygame.display.set_caption(text)
+        fps_text = "FPS: {0:.2f}".format(self._clock.get_fps())
+        rx, ry, rth = self._gridworld.robotpose
+        pygame.display.set_caption("(%.2f,%.2f,%.2f) %s" % (rx, ry, rth*180/math.pi,
+                                                            fps_text))
         pygame.display.flip() 
  
     def on_cleanup(self):
@@ -145,5 +193,5 @@ class App:
 
 if __name__ == "__main__" :
     gridworld = GridWorld(world1)
-    theApp = App(gridworld, fps=60)
+    theApp = App(gridworld, res=30, fps=60)
     theApp.on_execute()
