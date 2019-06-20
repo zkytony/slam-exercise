@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import sympy
 
 
 class SensorModel:
@@ -9,65 +10,128 @@ class SensorModel:
     @classmethod
     def interpret_params(cls, sensor_model, sensor_params):
         if sensor_model == SensorModel.RANGE_BEARING:
+            required_params = set({
+                'max_range', 'min_range', 'view_angles',
+                'sigma_dist', 'sigma_bearing'
+            })
             if type(sensor_params) == dict:
-                if not ('max_range' in sensor_params \
-                        and 'min_range' in sensor_params\
-                        and 'view_angles' in sensor_params):
-                    raise ValueError("Invalid sensor parameters for range sensor %s" % sensor_params)
-                else:
+                if sensor_params.keys() == required_params:
                     return sensor_params
-            elif type(sensor_params) == tuple:
-                max_range, min_range, view_angles = sensor_params
-                return {'max_range': max_range,
-                        'min_range': min_range,
-                        'view_angles': view_angles}
+            else:
+                raise ValueError("parameters must be a dict!")
 
             
 class MotionModel:
     ODOMETRY = 0
     VELOCITY = 1
+    
+    @classmethod
+    def interpret_params(cls, motion_model, motion_params):
+        if motion_model == MotionModel.ODOMETRY:
+            required_params = set({
+                'sigma_x', 'sigma_y', 'sigma_th'
+            })
+            if type(motion_params) == dict:
+                if motion_params.keys() == required_params:
+                    return motion_params
+            else:
+                raise ValueError("parameters must be a dict!")    
 
 
 class EKFSlamRobot:
 
     def __init__(self, num_landmarks,
                  sensor_model=SensorModel.RANGE_BEARING, sensor_params={},
-                 motion_model=MotionModel.ODOMETRY, motion_params={}):
+                 motion_model=MotionModel.ODOMETRY, motion_params={},
+                 known_correspondence=True):
+        """
+        num_landmarks (int): must be provided if 'known_correspondence'.
+            If unknown, then -1.
+        """
+        self._num_landmarks = num_landmarks
         self._sensor_model = sensor_model
-        self._sensor_params = sensor_params
+        self._sensor_params = SensorModel.interpret_params(sensor_model, sensor_params)
         self._motion_model = motion_model
-        self._motion_params = motion_params
+        self._motion_params = MotionModel.interpret_params(motion_model, motion_params)        
+        self._known_correspondence = True
 
+    @property
+    def state_dim(self):
+        """dimensionality of state"""
+        return 3 + 2 * self._num_landmarks  # robot: (x,y,th); landmark i: (x,y)
+
+    @property
+    def cov_rr(self):
+        return self._Sigma[:3, :3]
+
+    @property
+    def cov_rm(self):
+        return self._Sigma[:3, 3:]
+
+    @property
+    def cov_mr(self):
+        return self._Sigma[3:, :3]
+
+    @property
+    def cov_mm(self):
+        return self._Sigma[3:, 3:]
+
+    @property
+    def est_robot_pose(self):
+        return self._mu[:3]
+
+    def est_landmark_pose(self, i):
+        return self._mu[3+i*2:3+i*2+2]
+
+    @property
+    def known_correspondence(self):
+        return self._known_correspondence
+    
+    def initialize_belief(self):
         # Initialize Gaussian belief
-        self._pr = np.array([0, 0, 0])           # robot pose
-        self._pm = np.zeros((num_landmarks*2,))  # landmark poses
-        self._cov_rr = np.zeros((3,3))
-        self._cov_rm = np.zeros((3,2*num_landmarks))
-        self._cov_mr = np.zeros((2*num_landmarks,3))
-        self._cov_mm = np.full((2*num_landmarks,2*num_landmarks), float('inf'))
+        self._mu = np.zeros((self.state_dim,))
+        self._Sigma = np.zeros((self.state_dim, self._state_dim))
+        self.cov_mm.fill(float('inf'))
 
 
-    @property
-    def est_pose(self):
-        ex, ey, eth = self._pr
-        ex = int(round(ex))
-        ey = int(round(ey))
-        eth = eth % (2*math.pi)        
-        return (ex, ey, eth)
+    def initialize_models(self):
+        if self._motion_model == MotionModel.ODOMETRY:
+            x, y, th, drot1, dtrans, drot2 = sympy.symbols('x y th dr1 dt dr2')
+            state_robot = sympy.Matrix([x,y,th])
+            self._g = sympy.Matrix([
+                x + dtrans * sympy.cos(th + drot1),
+                y + dtrans * sympy.sin(th + drot1),
+                th + drot1 + drot2
+            ])
+            self._G = self._g.jacobian(state_robot)
+            self._R = np.array([
+                [self._motion_params['sigma_x']**2, 0, 0],
+                0, [self._motion_params['sigma_y']**2, 0],
+                0, 0, [self._motion_params['sigma_th']**2]
+            ])
 
-    @property
-    def motion_model(self):
-        return self._motion_model
-    
-    @property
-    def sensor_model(self):
-        return self._sensor_model
-    
-    @property
-    def sensor_params(self):
-        return self._sensor_params
+        if self._sensor_model == SensorModel.RANGE_BEARING:
+            x, y, th = sympy.symbols('x y th')   # robot pose
+            mjx, mjy = sympy.symbols('mjx mjy')  # pose of corresponding landmark j
+            self._hi = sympy.Matrix([
+                sympy.sqrt((mjx - x)**2 + (mjy - y)**2),
+                sympy.atan2(mjy - y, mjx - x) - th
+            ])
+            state = sympy.Matrix([x,y,th,mjx,mjy])
+            self._Hi = self._hi.jacobian(state)
+            self._Q = np.array([[self._sensor_params['sigma_dist']**2, 0],
+                                [0, self._sensor_params['sigma_bearing']**2]])
+        
 
-    def update(self, u, z):
+    def update(self, u, z_withc):
+        if self._known_correspondence:
+            z, c = z_withc
+            self._update_known_correspondence(u, z, c)
+        else:
+            z = z_withc
+            raise ValueError("EKF SLAM with unknown correspondence is not implemented.")            
+
+    def _update_known_correspondence(self, u, z, c):
         print("### Observation:")
         print(z)
         print("### Control:")
@@ -78,11 +142,19 @@ class EKFSlamRobot:
         # Prediction
         if self._motion_model == MotionModel.ODOMETRY:
             drot1, dtrans, drot2 = u
+
+            
+
+            
+
+
+            
             rx, ry, rth = self._pr
             self._pr = np.array([int(round(rx + dtrans*math.cos(rth + drot1))),
                                  int(round(ry + dtrans*math.sin(rth + drot1))),
                                  (rth + drot1 + drot2) % (2*math.pi)])
-
+        
+            
         
 
 

@@ -133,7 +133,7 @@ class GridWorld:
                 return (0, 0, 0)                    
 
 
-    def provide_observation(self, sensor_model, sensor_params):
+    def provide_observation(self, sensor_model, sensor_params, known_correspondence=False):
         """Given the current robot pose, provide the observation z."""
         def in_field_of_view(th, view_angles):
             """Determines if the beame at angle `th` is in a field of view of size `view_angles`.
@@ -148,23 +148,22 @@ class GridWorld:
             # TODO: right now the laser penetrates through obstacles. Fix this?
             rx, ry, rth = self._robotpose
             z_candidates = [(dist(l, (rx, ry)),  # distance
-                             (math.atan2(l[1] - ry, l[0] - rx) - rth) % (2*math.pi))  # bearing (i.e. orientation)
-                            for l in self._landmarks  #get_coords(self._d)
+                             (math.atan2(l[1] - ry, l[0] - rx) - rth) % (2*math.pi), # bearing (i.e. orientation)
+                             i)
+                            for i,l in enumerate(self._landmarks)  #get_coords(self._d)
                             if dist(l, self._robotpose[:2]) <= params['max_range']\
                             and dist(l, self._robotpose[:2]) >= params['min_range']]
-            print("-------------------------")
-            print(z_candidates)
-            ths = np.unique(np.array([th*180/math.pi for d, th in z_candidates]))
-            print("============")
-            print(ths)
-            print(len(ths))
-            print("-------------------------")
-            z = [(d, th) for d,th in z_candidates
-                 if in_field_of_view(th, params['view_angles'])]
 
-            # for visualization
+            z_withc = [(d, th, i) for d,th,i in z_candidates
+                       if in_field_of_view(th, params['view_angles'])]
+            z = [(d, th) for d, th, _ in z_withc]
+            c = [i for _, _, i in z_withc]
             self._last_z = z
-            return z
+            
+            if known_correspondence:
+                return z, c
+            else:
+                return z
             
 class Environment:
 
@@ -263,9 +262,9 @@ class Environment:
                 u = self._gridworld.move_robot(1, 0, robot.motion_model)
 
             if u is not None:
-                z = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, robot.sensor_params)
+                z = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, robot.sensor_params,
+                                                        known_correspondence=robot.known_correspondence)
                 robot.update(u, z)  # the robot updates its belief
-                
             
     def on_loop(self):
         self._playtime += self._clock.tick(self._fps) / 1000.0
@@ -297,7 +296,18 @@ class Environment:
 
 if __name__ == "__main__" :
     gridworld = GridWorld(world1)
-    robot = EKFSlamRobot(10, sensor_params={'max_range':3, 'min_range':1, 'view_angles': math.pi})
+    robot = EKFSlamRobot(10,
+                         sensor_params={
+                             'max_range':4,
+                             'min_range':1,
+                             'view_angles': math.pi,
+                             'sigma_dist': 0.1,
+                             'sigma_bearing': 0.1},
+                         motion_params={
+                             'sigma_x': 0.1,
+                             'sigma_y': 0.1,
+                             'sigma_th': 0.1
+                         })
     theEnvironment = Environment(gridworld, robot, res=30, fps=60)
     theEnvironment.on_execute()
 
