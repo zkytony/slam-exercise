@@ -9,7 +9,7 @@ from gridslam import MotionModel, SensorModel, EKFSlamRobot
 # |
 # v
 # Y
-# Angle: 0 is up, counter-clockwise.
+# Angle: 0 is right (x-axis positive), counter-clockwise.
 world1 = \
 """
 ..........x..
@@ -22,10 +22,31 @@ world1 = \
 ......xxxxx..
 """
 
+world2 = \
+"""
+..............
+..x..x..x..x..
+..............
+..x..x..x..x..
+R.............
+"""
+
 def dist(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
     return math.sqrt((x1-x2)**2 + (y1-y2)**2)
+
+def inclusive_within(v, rg):
+    a, b = rg # range
+    return v >= a and v <= b
+
+def get_coords(arr2d):
+    rows = np.arange(arr2d.shape[0])
+    cols = np.arange(arr2d.shape[1])
+    coords = np.empty((len(rows), len(cols), 2), dtype=np.intp)
+    coords[..., 0] = rows[:, None]
+    coords[..., 1] = cols
+    return coords.reshape(-1, 2)
 
 class GridWorld:
     
@@ -52,12 +73,13 @@ class GridWorld:
                     landmarks.add((x,y))
                 elif c == "R":
                     arr2d[x,y] = 0
-                    robotpose = (x,y,math.pi/4)
+                    robotpose = (x,y,0)
         if robotpose is None:
             raise ValueError("No initial robot pose!")
         self._d = arr2d
         self._robotpose = robotpose
         self._landmarks = landmarks
+        self._last_z = []
         
     @property
     def width(self):
@@ -70,6 +92,10 @@ class GridWorld:
     @property
     def arr(self):
         return self._d
+
+    @property
+    def last_observation(self):
+        return self._last_z
 
     @property
     def robotpose(self):
@@ -109,18 +135,38 @@ class GridWorld:
 
     def provide_observation(self, sensor_model, sensor_params):
         """Given the current robot pose, provide the observation z."""
+        def in_field_of_view(th, view_angles):
+            """Determines if the beame at angle `th` is in a field of view of size `view_angles`.
+            For example, the view_angles=180, means the range scanner scans 180 degrees
+            in front of the robot. By our angle convention, 180 degrees maps to [0,90] and [270, 360]."""
+            fov_right = (0, view_angles / 2)
+            fov_left = (2*math.pi - view_angles/2, 2*math.pi)
+            return inclusive_within(th, fov_left) or inclusive_within(th, fov_right) 
+            
         params = SensorModel.interpret_params(sensor_model, sensor_params)
         if sensor_model == SensorModel.RANGE_BEARING:
-            landmarks_in_range = set(l for l in self._landmarks
-                                     if dist(l, self._robotpose[:2]) <= params['max_range']\
-                                     and dist(l, self._robotpose[:2]) >= params['min_range'])
+            # TODO: right now the laser penetrates through obstacles. Fix this?
             rx, ry, rth = self._robotpose
-            z = [(dist(l, (rx, ry)),  # distance
-                  math.atan2(l[1] - ry, l[0] - rx) - rth)  # bearing (i.e. orientation)
-                 for l in landmarks_in_range]
+            z_candidates = [(dist(l, (rx, ry)),  # distance
+                             (math.atan2(l[1] - ry, l[0] - rx) - rth) % (2*math.pi))  # bearing (i.e. orientation)
+                            for l in self._landmarks  #get_coords(self._d)
+                            if dist(l, self._robotpose[:2]) <= params['max_range']\
+                            and dist(l, self._robotpose[:2]) >= params['min_range']]
+            print("-------------------------")
+            print(z_candidates)
+            ths = np.unique(np.array([th*180/math.pi for d, th in z_candidates]))
+            print("============")
+            print(ths)
+            print(len(ths))
+            print("-------------------------")
+            z = [(d, th) for d,th in z_candidates
+                 if in_field_of_view(th, params['view_angles'])]
+
+            # for visualization
+            self._last_z = z
             return z
             
-class App:
+class Environment:
 
     def __init__(self, gridworld, robot, res=30, fps=30):
         """
@@ -153,19 +199,32 @@ class App:
                 cv2.rectangle(img, (y*r, x*r), (y*r+r, x*r+r),
                               (0, 0, 0), 1, 8)                    
         return img
-        
+
+    @staticmethod
+    def draw_robot(img, x, y, th, size, color=(255,12,12)):
+        radius = int(round(size / 2))
+        cv2.circle(img, (y+radius, x+radius), radius, color, thickness=2)
+
+        endpoint = (y+radius + int(round(radius*math.sin(th))),
+                    x+radius + int(round(radius*math.cos(th))))
+        cv2.line(img, (y+radius,x+radius), endpoint, color, 2)
+
+    @staticmethod
+    def draw_observation(img, z, rx, ry, rth, r, size, color=(12,12,255)):
+        radius = int(round(r / 2))
+        for d, th in z:
+            lx = rx + int(round(d * math.cos(rth + th)))
+            ly = ry + int(round(d * math.sin(rth + th)))
+            cv2.circle(img, (ly*r+radius,
+                             lx*r+radius), size, (12, 12, 255), thickness=-1)
+
     def render_env(self, display_surf):
         # draw robot, a circle and a vector
         rx, ry, rth = self._gridworld.robotpose
         r = self._resolution  # Not radius!
-        radius = int(round(r / 2))
         img = np.copy(self._img)
-        cv2.circle(img, (ry*r+radius, rx*r+radius), radius, (255, 12, 12), thickness=2)
-
-        endpoint = (ry*r+radius + int(round(r/2*math.sin(rth))),
-                    rx*r+radius + int(round(r/2*math.cos(rth))))
-        cv2.line(img, (ry*r+radius,rx*r+radius), endpoint, (255, 12, 12), 2)
-                 
+        Environment.draw_robot(img, rx*r, ry*r, rth, r, color=(255, 12, 12))
+        Environment.draw_observation(img, self._gridworld.last_observation, rx, ry, rth, r, r//3, color=(12,12,255))
         pygame.surfarray.blit_array(display_surf, img)
         
     @property
@@ -194,19 +253,18 @@ class App:
         if event.type == pygame.QUIT:
             self._running = False
         elif event.type == pygame.KEYDOWN:
-            
+
+            u = None
             if event.key == pygame.K_LEFT:
                 u = self._gridworld.move_robot(0, -math.pi/4, robot.motion_model)  # rotate left 45 degree
-                robot.move(u)
             elif event.key == pygame.K_RIGHT:
                 u = self._gridworld.move_robot(0, math.pi/4, robot.motion_model)  # rotate left 45 degree
-                robot.move(u)
             elif event.key == pygame.K_UP:
                 u = self._gridworld.move_robot(1, 0, robot.motion_model)
-                robot.move(u)
-                
-            z = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, robot.sensor_params)
-            robot.observe(z)
+
+            if u is not None:
+                z = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, robot.sensor_params)
+                robot.update(u, z)  # the robot updates its belief
                 
             
     def on_loop(self):
@@ -239,6 +297,7 @@ class App:
 
 if __name__ == "__main__" :
     gridworld = GridWorld(world1)
-    robot = EKFSlamRobot(sensor_params={'max_range':5, 'min_range':1})
-    theApp = App(gridworld, robot, res=30, fps=60)
-    theApp.on_execute()
+    robot = EKFSlamRobot(10, sensor_params={'max_range':3, 'min_range':1, 'view_angles': math.pi})
+    theEnvironment = Environment(gridworld, robot, res=30, fps=60)
+    theEnvironment.on_execute()
+
