@@ -1,7 +1,9 @@
 import math
 import numpy as np
-from numpy.linalg import inv
+from numpy.linalg import inv, LinAlgError
 import sympy
+import matplotlib.pyplot as plt
+import sys
 
 
 class SensorModel:
@@ -38,14 +40,19 @@ class MotionModel:
             else:
                 raise ValueError("parameters must be a dict!")
 
-def eval_model(model, symbols, values, np=False, dtype=np.float64):
+def eval_model(model, symbols, values, to_np=False, dtype=np.float64):
     if len(symbols) != len(values):
         raise ValueError("Cannot evaluate model. Symbols and values mismatch.")
     result = model.subs([(symbols[i], values[i]) for i in range(len(symbols))])
-    if np:
+    if to_np:
         return np.array(result, dtype=dtype)
     else:
         return result
+
+def mymul(a, b):
+    res = np.matmul(a,b)
+    res[np.isnan(res)] = 0
+    return res
 
 class EKFSlamRobot:
 
@@ -63,24 +70,40 @@ class EKFSlamRobot:
         self._motion_model = motion_model
         self._motion_params = MotionModel.interpret_params(motion_model, motion_params)        
         self._known_correspondence = True
+        self._belief_fig = None
+        self.initialize_belief()
+        self.initialize_models()
 
     @property
     def known_correspondence(self):
         return self._known_correspondence
+    
+    @property
+    def motion_model(self):
+        return self._motion_model
 
+    @property
+    def sensor_model(self):
+        return self._sensor_model
+
+    @property
+    def sensor_params(self):
+        return self._sensor_params
+
+    @property
     def current_map(self):
-        pass
+        return self._mu[3:].reshape(-1,2), self._Sigma[3:,3:]
 
+    @property
     def current_pose(self):
-        pass
+        return self._mu[:3], self._Sigma[:3,:3]
     
     def initialize_belief(self):
         # Initialize Gaussian belief
         state_dim = 3+2*self._num_landmarks
         self._mu = np.zeros((state_dim,))
         self._Sigma = np.zeros((state_dim, state_dim))
-        self.cov_mm.fill(float('inf'))
-
+        self._Sigma[3:,3:].fill(sys.float_info.max)
 
     def initialize_models(self):
         if self._motion_model == MotionModel.ODOMETRY:
@@ -94,8 +117,8 @@ class EKFSlamRobot:
             self._Jgrd = self._grd.jacobian(state_robot)
             self._R = np.array([
                 [self._motion_params['sigma_x']**2, 0, 0],
-                0, [self._motion_params['sigma_y']**2, 0],
-                0, 0, [self._motion_params['sigma_th']**2]
+                [0, self._motion_params['sigma_y']**2, 0],
+                [0, 0, self._motion_params['sigma_th']**2]
             ])
             self._symbols_motion = (x, y, th, drot1, dtrans, drot2)
 
@@ -111,6 +134,36 @@ class EKFSlamRobot:
             self._Q = np.array([[self._sensor_params['sigma_dist']**2, 0],
                                 [0, self._sensor_params['sigma_bearing']**2]])
             self._symbols_sensor = (x, y, th, mjx, mjy)
+
+    def plot_belief(self):
+        
+        m, cov_m = self.current_map
+        p, cov_p = self.current_pose
+        
+        m_x = [int(round(m[i][0])) for i in range(len(m))
+               if not np.isnan(m[i][0]) and not np.isnan(m[i][1])]
+        m_y = [int(round(m[i][1])) for i in range(len(m))
+               if not np.isnan(m[i][1]) and not np.isnan(m[i][0])]
+        print(m_x)
+        print(m_y)
+        p[np.isnan(p)] = 0
+        p = [int(round(p[i])) for i in range(2)] + [p[2]]
+
+        if self._belief_fig is None:
+            plt.ion()
+            self._belief_fig = plt.figure()
+            ax = self._belief_fig.add_subplot(111)
+            self._map_plot = ax.scatter(m_x, m_y, 200)
+            self._robot_plot = ax.scatter([p[0]], [p[1]], 200)
+            self._belief_fig.canvas.draw()
+            self._belief_fig.canvas.flush_events()
+        else:
+            ax = self._belief_fig.axes[0]
+            ax.clear()
+            self._map_plot = ax.scatter(m_x, m_y, 200)
+            self._robot_plot = ax.scatter([p[0]], [p[1]], 200)
+            self._belief_fig.canvas.draw()
+            self._belief_fig.canvas.flush_events()
         
 
     def update(self, u, z_withc):
@@ -122,16 +175,9 @@ class EKFSlamRobot:
             raise ValueError("EKF SLAM with unknown correspondence is not implemented.")            
 
     def _update_known_correspondence(self, u, z, c):
-        print("### Observation:")
-        print(z)
-        print("### Control:")
-        print(u)
-        print("-------Update--------")
-        print("pr (t-1): %s" % self._pr)
-
         N = self._num_landmarks
         
-        Fx = np.zeros((3, 3+2*n))
+        Fx = np.zeros((3, 3+2*N))
         Fx[:3,:3] = np.identity(3)
 
         # Prediction
@@ -140,13 +186,14 @@ class EKFSlamRobot:
             pred_mu = np.copy(self._mu)
             pred_mu[:3] = pred_mu[:3] + eval_model(self._grd,
                                                    self._symbols_motion,
-                                                   self._mu[:3].tolist() + list(u), np=True)
+                                                   self._mu[:3].tolist() + list(u), to_np=True).reshape(-1,)
             Jgrd = eval_model(self._Jgrd,
                               self._symbols_motion,
-                              self._mu[:3].tolist() + list(u), np=True) # equivalent to gt in Prob.Rob.pg.318
-            Gt = np.identity(3+2*n) + Fx.T * Jgrd * Fx
+                              self._mu[:3].tolist() + list(u), to_np=True) # equivalent to gt in Prob.Rob.pg.318
+            Gt = np.identity(3+2*N) + np.matmul(np.matmul(Fx.T, Jgrd), Fx)
             pred_Sigma = np.copy(self._Sigma)
-            pred_Sigma = Gt * pred_sigma * Gt.T + Fx.T * self._R * Fx
+            pred_Sigma = np.matmul(mymul(Gt, pred_Sigma), Gt.T)\
+                         + np.matmul(np.matmul(Fx.T, self._R), Fx)
         else:
             raise ValueError("Motion model not supported")
 
@@ -154,33 +201,40 @@ class EKFSlamRobot:
         landmarks_seen = set({})
         z = np.array(z)
         if self._sensor_model == SensorModel.RANGE_BEARING:
-            rx, ry, rth = self.mu_r  # robot pose
+            rx, ry, rth = self.current_pose[0]  # robot pose
             for i in range(len(z)):
                 j = c[i]
                 if j not in landmarks_seen:
-                    d, th = z  # distance, bearing
+                    d, th = z[i]  # distance, bearing
                     mjx = rx + int(round(d * math.cos(rth + th)))
                     mjy = ry + int(round(d * math.sin(rth + th)))
                     pred_mu[3+j*2:3+j*2+2] = [mjx, mjy]  # initial expectation
                     landmarks_seen.add(j)
 
                 mu_mj = pred_mu[3+j*2:3+j*2+2]
-                z_hat = eval_model(self._hj,
+                zi_hat = eval_model(self._hj,
                                    self._symbols_sensor,
-                                   self._mu[:3].tolist() + mu_mj.tolist(), np=True)
+                                   self._mu[:3].tolist() + mu_mj.tolist(), to_np=True).reshape(-1,)
                 Jhj = eval_model(self._Jhj,
                                  self._symbols_sensor,
-                                 self._mu[:3].tolist() + mu_mj.tolist(), np=True)
+                                 self._mu[:3].tolist() + mu_mj.tolist(), to_np=True)
                 Fxj = np.zeros((5, 3+2*N))
                 Fxj[:3,:3] = np.identity(3)
-                Fxj[3+(2*j-2):3+(2*j-2)+2,3:5] = np.identity(2)
-                
-                Hi = Jhj * Fxj
+                Fxj[3:5,3+(2*j-2):3+(2*j-2)+2] = np.identity(2)
 
-                Ki = pred_Sigma * Hi.T * inv(Hi * pred_Sigma * Hi.T + self._Q)
-                pred_mu = pred_mu + Ki * (z - z_hat)
-                pred_Sigma = (np.identity(3+2*N) - Ki * Hi) * pred_Sigma
-            self._mu = pred_mu
+                Hi = np.matmul(Jhj, Fxj)
+
+                try:
+                    Ki = np.matmul(mymul(pred_Sigma, Hi.T),
+                                   inv(np.matmul(mymul(Hi, pred_Sigma), Hi.T) + self._Q))
+                    pred_mu = pred_mu + np.matmul(Ki, (z[i] - zi_hat))
+                    pred_Sigma = mymul((np.identity(3+2*N) - np.matmul(Ki, Hi)), pred_Sigma)
+                except LinAlgError as e:
+                    print("Update failed. Inverse not computable")
+            th = pred_mu[2]
+            pred_mu[np.isnan(pred_mu)] = 0
+            self._mu = np.array([int(round(pred_mu[i])) for i in range(len(pred_mu))], dtype=np.float64)
+            self._mu[2] = th % (2*math.pi)
             self._Sigma = pred_Sigma
                                 
         else:

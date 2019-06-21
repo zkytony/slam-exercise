@@ -31,6 +31,43 @@ world2 = \
 R.............
 """
 
+world3 = \
+"""
+..........
+.xxxxxxxx.
+.xR.....x.
+.x..xx..x.
+.x......x.
+.xxxxxxxx.
+..........
+"""
+
+world4= \
+"""
+............................
+..xxxxxxxxxxxxxxxxxxxxxxxx..
+..xR.....................x..
+..x......................x..
+..x..xxxxxxxxxxxxxxxxxx..x..
+..x..x................x..x..
+..x..xxxxxxxxxxxxxxxxxx..x..
+..x......................x..
+..x......................x..
+..xxxxxxxxxxxxxxxxxxxxxxxx..
+............................
+"""
+
+world5 = \
+"""
+.............
+.xxxxxxxxxx..
+.xR....x..x..
+.x..x..x..x..
+.x..x.....x..
+.xxxxxxxxxx..
+.............
+"""
+
 def dist(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
@@ -96,6 +133,10 @@ class GridWorld:
     @property
     def last_observation(self):
         return self._last_z
+
+    @property
+    def num_landmarks(self):
+        return len(self._landmarks)
 
     @property
     def robotpose(self):
@@ -179,7 +220,6 @@ class Environment:
         
         self._running = True
         self._display_surf = None
-        self._image_surf = None
         self._fps = fps
         self._playtime = 0
 
@@ -247,24 +287,39 @@ class Environment:
         # Font
         self._myfont = pygame.font.SysFont('Comic Sans MS', 30)
         self._running = True
- 
+
     def on_event(self, event):
         if event.type == pygame.QUIT:
             self._running = False
         elif event.type == pygame.KEYDOWN:
-
             u = None
             if event.key == pygame.K_LEFT:
-                u = self._gridworld.move_robot(0, -math.pi/4, robot.motion_model)  # rotate left 45 degree
+                u = self._gridworld.move_robot(0, -math.pi/4, self._robot.motion_model)  # rotate left 45 degree
             elif event.key == pygame.K_RIGHT:
-                u = self._gridworld.move_robot(0, math.pi/4, robot.motion_model)  # rotate left 45 degree
+                u = self._gridworld.move_robot(0, math.pi/4, self._robot.motion_model)  # rotate left 45 degree
             elif event.key == pygame.K_UP:
-                u = self._gridworld.move_robot(1, 0, robot.motion_model)
+                u = self._gridworld.move_robot(1, 0, self._robot.motion_model)
 
             if u is not None:
-                z = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, robot.sensor_params,
-                                                        known_correspondence=robot.known_correspondence)
-                robot.update(u, z)  # the robot updates its belief
+                z_withc = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, self._robot.sensor_params,
+                                                              known_correspondence=robot.known_correspondence)
+
+                # print("xxx Observation xxx")
+                # print(z_withc)
+                # print("xxx Control xxx")
+                # print(u)
+                
+                self._robot.update(u, z_withc)  # the robot updates its belief
+                print("------ Belief ------")
+                m, Sigma_m = self._robot.current_map
+                p, Sigma_p = self._robot.current_pose
+                print("===Map===")
+                print(m)
+                print(Sigma_m)
+                print("===Pose===")
+                print(p)
+                print(Sigma_p)
+                self._robot.plot_belief()
             
     def on_loop(self):
         self._playtime += self._clock.tick(self._fps) / 1000.0
@@ -295,19 +350,28 @@ class Environment:
 
 
 if __name__ == "__main__" :
-    gridworld = GridWorld(world1)
-    robot = EKFSlamRobot(10,
+    gridworld = GridWorld(world4)
+    robot = EKFSlamRobot(gridworld.num_landmarks,
                          sensor_params={
                              'max_range':4,
                              'min_range':1,
                              'view_angles': math.pi,
-                             'sigma_dist': 0.1,
-                             'sigma_bearing': 0.1},
+                             'sigma_dist': 0.01,
+                             'sigma_bearing': 0.01},
                          motion_params={
-                             'sigma_x': 0.1,
-                             'sigma_y': 0.1,
-                             'sigma_th': 0.1
+                             'sigma_x': 0.01,
+                             'sigma_y': 0.01,
+                             'sigma_th': 0.01
                          })
-    theEnvironment = Environment(gridworld, robot, res=30, fps=60)
+    print("------ Belief ------")
+    m, Sigma_m = robot.current_map
+    p, Sigma_p = robot.current_pose
+    print("===Map===")
+    print(m)
+    print(Sigma_m)
+    print("===Pose===")
+    print(p)
+    print(Sigma_p)    
+    theEnvironment = Environment(gridworld, robot, res=30, fps=30)
     theEnvironment.on_execute()
 
