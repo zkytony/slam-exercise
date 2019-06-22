@@ -274,12 +274,6 @@ class EKFSlamRobot:
         else:
             raise ValueError("Motion model not supported")
 
-
-
-        # print("XXX Prediction XXX")
-        # print(pred_mu)
-        # print(pred_Sigma)
-
         # Correction
         z = np.array(z)
         if self._sensor_model == SensorModel.RANGE_BEARING:
@@ -311,8 +305,6 @@ class EKFSlamRobot:
                                    LA.inv(np.matmul(mymul(Hi, pred_Sigma), Hi.T) + self._Q))
                     pred_mu = pred_mu + np.matmul(Ki, (z[i] - zi_hat))
                     pred_Sigma = mymul((np.identity(3+2*N) - np.matmul(Ki, Hi)), pred_Sigma)
-                    # print("XXX Correction [%d] XXX" % i)
-                    # print(pred_mu)
                 except LA.LinAlgError as e:
                     print("Update failed. Inverse not computable")
             th = pred_mu[2]

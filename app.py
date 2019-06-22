@@ -344,18 +344,18 @@ class Environment:
                 z_withc = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, self._robot.sensor_params,
                                                               known_correspondence=robot.known_correspondence)
 
+                print("------Truth------")
                 print("   control: %s" % str(u))
                 print("robot pose: %s" % str(self._gridworld.robotpose))
                 
                 self._robot.update(u, z_withc)  # the robot updates its belief
                 m, Sigma_m = self._robot.current_map
                 p, Sigma_p = self._robot.current_pose
-                # print("===Map===")
-                # print(m)
-                # print(Sigma_m)
-                # print("===Pose===")
-                # print(p)
-                # print(Sigma_p)
+                print("------Belief------")
+                print("===Map===")
+                print(m)
+                print("===Pose===")
+                print(p)
                 self._robot.plot_belief(disk_size=20)
             
     def on_loop(self):
