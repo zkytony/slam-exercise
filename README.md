@@ -1,9 +1,5 @@
 # slam-exercise
 
-### Plan
+### Implementation of EKF SLAM with known correspondence
 
-1. create a 2D environment
-2. enable laser range observation
-3. enable manual control
-4. slam
-everything probabilistic
+See video demo [here](https://www.youtube.com/watch?v=1SmKx2YRUuk&feature=youtu.be).

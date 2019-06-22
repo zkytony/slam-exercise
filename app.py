@@ -356,7 +356,7 @@ class Environment:
                 print(m)
                 print("===Pose===")
                 print(p)
-                self._robot.plot_belief(disk_size=20)
+                self._robot.plot_belief(disk_size=20, worldsize=max(self._gridworld.width, self._gridworld.height))
             
     def on_loop(self):
         self._playtime += self._clock.tick(self._fps) / 1000.0
@@ -389,7 +389,7 @@ class Environment:
 if __name__ == "__main__" :
     world, res = huge_random_world(w=10, h=10, prob=0.1)
     
-    gridworld = GridWorld(world6)
+    gridworld = GridWorld(world1)
     robot = EKFSlamRobot(gridworld.num_landmarks,
                          sensor_params={
                              'max_range':12,

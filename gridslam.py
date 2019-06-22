@@ -141,7 +141,7 @@ class EKFSlamRobot:
                                 [0, self._sensor_params['sigma_bearing']**2]])
             self._symbols_sensor = (x, y, th, mjx, mjy)
 
-    def plot_belief(self, disk_size=10):
+    def plot_belief(self, disk_size=10, worldsize=30):
 
         def plot_map(ax, m_x, m_y, eig_m, disk_size, color):
             radius = int(round(disk_size / 2))            
@@ -220,8 +220,8 @@ class EKFSlamRobot:
             plt.ion()
             self._belief_fig = plt.figure()
             ax = self._belief_fig.add_subplot(111)
-            ax.set_xlim(-50, 50)
-            ax.set_ylim(-50, 50)
+            ax.set_xlim(-worldsize*2, worldsize*2)
+            ax.set_ylim(-worldsize*2, worldsize*2)
             plot_map(ax, m_x, m_y, eig_m, disk_size, color="#FF3366")
             plot_robot(ax, p[0], p[1], p[2], eig_p, disk_size, color="#6622FF")
             self._belief_fig.canvas.draw()
@@ -229,8 +229,8 @@ class EKFSlamRobot:
         else:
             ax = self._belief_fig.axes[0]
             ax.clear()
-            ax.set_xlim(-50, 50)
-            ax.set_ylim(-50, 50)
+            ax.set_xlim(-worldsize*2, worldsize*2)
+            ax.set_ylim(-worldsize*2, worldsize*2)
             plot_map(ax, m_x, m_y, eig_m, disk_size, color="#FF3366")
             plot_robot(ax, p[0], p[1], p[2], eig_p, disk_size, color="#6622FF")
             plot_pose_history(ax, self._pose_history, disk_size, color="#223388")
