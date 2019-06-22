@@ -2,6 +2,7 @@ import numpy as np
 import pygame
 import cv2
 import math
+import random
 from gridslam import MotionModel, SensorModel, EKFSlamRobot
 
 # Coordinates
@@ -67,6 +68,45 @@ world5 = \
 .xxxxxxxxxx..
 .............
 """
+
+world6 = \
+"""
+....................................
+....................................
+.R..................................
+....................................
+....................................
+.....x.......x.......x.......x......
+....................................
+....................................
+....................................
+....................................
+....................................
+....................................
+....................................
+.....x.......x.......x.......x......
+....................................
+....................................
+....................................
+....................................
+....................................
+""" # textbook
+
+def huge_random_world(w=100, h=100, prob=0.01):
+    world = ""
+    robot_pose = (random.randint(0,w-1),
+                  random.randint(0,h-1))
+    res = 300 // max(w,h)
+    for i in range(w):
+        line = ["."] * h
+        for j in range(h):
+            if (i,j) == robot_pose:
+                line[j] = "R"
+            else:
+                if random.uniform(0, 1/prob) < 1:
+                    line[j] = "x"
+        world += "".join(line) + "\n"
+    return world, res
 
 def dist(p1, p2):
     x1, y1 = p1
@@ -304,22 +344,19 @@ class Environment:
                 z_withc = self._gridworld.provide_observation(SensorModel.RANGE_BEARING, self._robot.sensor_params,
                                                               known_correspondence=robot.known_correspondence)
 
-                # print("xxx Observation xxx")
-                # print(z_withc)
-                # print("xxx Control xxx")
-                # print(u)
+                print("   control: %s" % str(u))
+                print("robot pose: %s" % str(self._gridworld.robotpose))
                 
                 self._robot.update(u, z_withc)  # the robot updates its belief
-                print("------ Belief ------")
                 m, Sigma_m = self._robot.current_map
                 p, Sigma_p = self._robot.current_pose
-                print("===Map===")
-                print(m)
-                print(Sigma_m)
-                print("===Pose===")
-                print(p)
-                print(Sigma_p)
-                self._robot.plot_belief()
+                # print("===Map===")
+                # print(m)
+                # print(Sigma_m)
+                # print("===Pose===")
+                # print(p)
+                # print(Sigma_p)
+                self._robot.plot_belief(disk_size=20)
             
     def on_loop(self):
         self._playtime += self._clock.tick(self._fps) / 1000.0
@@ -350,10 +387,12 @@ class Environment:
 
 
 if __name__ == "__main__" :
-    gridworld = GridWorld(world4)
+    world, res = huge_random_world(w=10, h=10, prob=0.1)
+    
+    gridworld = GridWorld(world6)
     robot = EKFSlamRobot(gridworld.num_landmarks,
                          sensor_params={
-                             'max_range':4,
+                             'max_range':12,
                              'min_range':1,
                              'view_angles': math.pi,
                              'sigma_dist': 0.01,
@@ -363,15 +402,7 @@ if __name__ == "__main__" :
                              'sigma_y': 0.01,
                              'sigma_th': 0.01
                          })
-    print("------ Belief ------")
-    m, Sigma_m = robot.current_map
-    p, Sigma_p = robot.current_pose
-    print("===Map===")
-    print(m)
-    print(Sigma_m)
-    print("===Pose===")
-    print(p)
-    print(Sigma_p)    
-    theEnvironment = Environment(gridworld, robot, res=30, fps=30)
+
+    theEnvironment = Environment(gridworld, robot, res=res, fps=20)
     theEnvironment.on_execute()
 
