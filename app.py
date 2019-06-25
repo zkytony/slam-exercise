@@ -389,7 +389,7 @@ class Environment:
 if __name__ == "__main__" :
     world, res = huge_random_world(w=10, h=10, prob=0.1)
     
-    gridworld = GridWorld(world1)
+    gridworld = GridWorld(world6)
     robot = EKFSlamRobot(gridworld.num_landmarks,
                          sensor_params={
                              'max_range':12,
